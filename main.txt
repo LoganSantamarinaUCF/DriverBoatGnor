@@ -1,0 +1,5 @@
+//Steps to get this compiling
+
+//1. Download Arduino IDE and open the sketch in this folder (arduinoFile.ino)
+//2. use vscode for git source control
+//3. everthing else is done on the arduino ide
