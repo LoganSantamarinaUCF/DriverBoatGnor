@@ -1,0 +1,103 @@
+#include <Wire.h>
+#include <MPU6050.h>
+#include <Servo.h>
+
+MPU6050 mpu;
+float currentAngle = 0; // Track heading
+
+// Define ESC and rudder servo
+Servo esc;
+Servo rudder;
+const int escPin = 9;
+const int rudderPin = 10;
+
+// Define waypoints
+float waypoints[6][2] = {
+    {60, 0}, {60, 40}, {20, 80}, {-20, 80}, {-60, 40}, {-60, 0}
+};
+
+// Boat position tracking
+float posX = 60, posY = 0;
+int waypointIndex = 1; // Start at second waypoint
+
+void setup() {
+    Serial.begin(115200);
+    Wire.begin();
+    mpu.initialize();
+    
+    esc.attach(escPin);
+    rudder.attach(rudderPin);
+    
+    // Initialize ESC (Assumes 1000-2000us PWM range)
+    esc.writeMicroseconds(1000); // Stop motor
+    delay(2000); // Allow ESC to initialize
+
+    // Ensure MPU6050 is connected
+    if (!mpu.testConnection()) {
+        Serial.println("MPU6050 connection failed!");
+        while (1);
+    }
+    Serial.println("MPU6050 connected.");
+}
+
+void loop() {
+    if (waypointIndex < 6) {
+        float targetX = waypoints[waypointIndex][0];
+        float targetY = waypoints[waypointIndex][1];
+
+        moveToWaypoint(targetX, targetY);
+        
+        if (waypointIndex < 5) {
+            turn45Degrees();
+        }
+
+        waypointIndex++;
+    } else {
+        stopMotor(); // Stop at final waypoint
+    }
+}
+
+// Move boat forward to target waypoint
+void moveToWaypoint(float targetX, float targetY) {
+    Serial.print("Moving to: "); Serial.print(targetX); Serial.print(", "); Serial.println(targetY);
+    driveForward();
+    delay(3000); // Adjust for actual distance/time
+    stopMotor();
+}
+
+// Turn boat 45 degrees using MPU6050
+void turn45Degrees() {
+    Serial.println("Turning 45 degrees...");
+    float initialAngle = getGyroAngle();
+    float targetAngle = initialAngle + 45;
+
+    while (getGyroAngle() < targetAngle) {
+        turnRight();
+        delay(50);
+    }
+    stopMotor();
+}
+
+// Read gyro angle
+float getGyroAngle() {
+    int16_t ax, ay, az, gx, gy, gz;
+    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    float angle = (gx / 131.0) * 0.01; // Convert gyro reading to degrees
+    currentAngle += angle;
+    return currentAngle;
+}
+
+// Motor control functions
+void driveForward() {
+    esc.writeMicroseconds(1500); // Adjust throttle for forward motion
+}
+
+void turnRight() {
+    rudder.write(90 + 45); // Adjust rudder for right turn
+    delay(1000); // Allow time for turn
+    rudder.write(90); // Reset rudder
+}
+
+void stopMotor() {
+    esc.writeMicroseconds(1000); // Stop motor
+}
