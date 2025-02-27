@@ -2,141 +2,117 @@
 #include <MPU6050.h>
 #include <Servo.h>
 
+// Define motor and servo pins
+#define MOTOR_PIN 9      // Motor speed control pin (PWM)
+#define SERVO_PIN 10     // Servo control pin
+
+// Set constant velocity (speed). Adjust based on the motor specifications.
+#define VELOCITY 255     // Max speed for motor (use a value between 0 and 255)
+
+// Define servo angle limits for rudder (degrees)
+#define RUDDER_MIN -40   // Minimum rudder angle (left)
+#define RUDDER_MAX 40    // Maximum rudder angle (right)
+
+// Define total desired travel time in seconds
+#define T_FINAL 10       // Desired time to complete the path (in seconds)
+
+// Define simulation time step for t (in terms of milliseconds)
+#define TIME_STEP 100    // Simulation step in milliseconds (to update every 100ms)
+
+// Create servo object for the rudder
+Servo rudderServo;
+
+// Create MPU6050 object
 MPU6050 mpu;
-float currentAngle = 0; // Track heading
 
-// Define ESC and rudder servo
-Servo esc;
-Servo rudder;
-const int escPin = 9;
-const int rudderPin = 10;
-
-// State machine states
-enum State {
-    LEG1,
-    LEG2,
-    LEG3,
-    LEG4,
-    LEG5
-};
-
-State currentState = LEG1;
-
-// Define the distance for each leg
-float legDistances[5] = {40, 40 * sqrt(2), 40, 40 * sqrt(2), 40};
-float speed = 1.0; // Speed in feet per second (adjust based on motor speed)
+// Gyroscope offset for yaw (initial calibration needed)
+float gyro_offset = 0;
 
 void setup() {
-    Serial.begin(115200);
-    Wire.begin();
-    mpu.initialize();
-    
-    esc.attach(escPin);
-    rudder.attach(rudderPin);
-    
-    // Initialize ESC (Assumes 1000-2000us PWM range)
-    esc.writeMicroseconds(1000); // Stop motor
-    delay(2000); // Allow ESC to initialize
-
-    // Ensure MPU6050 is connected
-    if (!mpu.testConnection()) {
-        Serial.println("MPU6050 connection failed!");
-        while (1);
-    }
-    Serial.println("MPU6050 connected.");
+  // Initialize motor and servo
+  pinMode(MOTOR_PIN, OUTPUT);
+  rudderServo.attach(SERVO_PIN);
+  
+  // Start motor at constant velocity
+  analogWrite(MOTOR_PIN, VELOCITY);
+  
+  // Set initial servo position (center)
+  rudderServo.write(0); // 0 degrees initially
+  
+  // Initialize Serial communication
+  Serial.begin(9600);
+  
+  // Initialize the MPU6050 sensor
+  Wire.begin();
+  mpu.initialize();
+  
+  // Calibrate the gyro (optional, for improved accuracy)
+  gyro_offset = mpu.getRotationZ();  // Get initial gyro offset for yaw
 }
 
 void loop() {
-    switch (currentState) {
-        case LEG1:
-            travelLeg(40);  // Travel 40 feet for LEG1
-            break;
-        case LEG2:
-            travelLeg(40 * sqrt(2));  // Travel sqrt(2) * 40 feet for LEG2
-            break;
-        case LEG3:
-            travelLeg(40);  // Travel 40 feet for LEG3
-            break;
-        case LEG4:
-            travelLeg(40 * sqrt(2));  // Travel sqrt(2) * 40 feet for LEG4
-            break;
-        case LEG5:
-            travelLeg(40);  // Travel 40 feet for LEG5
-            break;
-    }
-}
+  // Calculate elapsed time in seconds
+  static unsigned long startTime = millis(); // Record the start time
+  unsigned long elapsedTime = millis() - startTime; // Elapsed time in milliseconds
+  float tau = elapsedTime / 1000.0; // Convert milliseconds to seconds
+  
+  if (tau >= T_FINAL) {
+    // Stop the boat after reaching the final time (semi-circle end)
+    analogWrite(MOTOR_PIN, 0);  // Stop the motor
+    return;
+  }
+  
+  // Calculate t based on the time scaling formula
+  float t = (tau / T_FINAL) * PI;  // t goes from 0 to PI over the travel time
+  
+  // Compute the direction vector components based on the new parametric equations
+  float dx_dt = -60 * sin(t);  // Derivative of x(t) = 60 * cos(t)
+  float dy_dt = 80 * cos(t);   // Derivative of y(t) = 80 * sin(t)
+  
+  // Normalize the direction vector to get the unit vector
+  float magnitude = sqrt(dx_dt * dx_dt + dy_dt * dy_dt);
+  float unit_dx = dx_dt / magnitude;
+  float unit_dy = dy_dt / magnitude;
+  
+  // Calculate the desired angle for the boat's heading (angle from positive X-axis)
+  float angle = atan2(unit_dy, unit_dx);  // atan2 returns angle in radians
+  
+  // Convert radians to degrees for servo control
+  float angle_deg = angle * (180.0 / PI);
+  
+  // Read the current yaw from the gyroscope
+  int16_t gx, gy, gz;
+  mpu.getRotation(&gx, &gy, &gz);  // Get gyro values (rotation around each axis)
+  
+  // Adjust yaw based on gyro data (rotate the yaw using Z-axis data)
+  float current_yaw = gyro_offset + (gz / 131.0);  // Convert to degrees (assuming 131 is the scale factor)
 
-// Travel a specific leg distance and then turn 45 degrees
-void travelLeg(float legDistance) {
-    // Calculate time required to travel the leg distance (time = distance / speed)
-    unsigned long travelTime = legDistance / speed * 1000;  // Convert to milliseconds
-    
-    // Move forward at the set speed for the leg
-    driveForward();
-    delay(travelTime);  // Move forward for the calculated time
-    
-    stopMotor();  // Stop the motor once the leg distance is traveled
-    
-    // Turn 45 degrees left
-    turn45Degrees();
-    
-    // Move to the next state
-    switch (currentState) {
-        case LEG1:
-            currentState = LEG2;
-            break;
-        case LEG2:
-            currentState = LEG3;
-            break;
-        case LEG3:
-            currentState = LEG4;
-            break;
-        case LEG4:
-            currentState = LEG5;
-            break;
-        case LEG5:
-            stopMotor(); // Final destination reached, stop the motor
-            break;
-    }
-}
-
-// Turn boat 45 degrees using MPU6050 and verify turn with gyro (LEFT TURN)
-void turn45Degrees() {
-    Serial.println("Turning 45 degrees left...");
-    float initialAngle = getGyroAngle();  // Read the initial angle
-    float targetAngle = initialAngle - 45;  // Set target angle (45 degrees left from current position)
-
-    // Turn until the current angle reaches the target angle
-    while (abs(getGyroAngle() - targetAngle) > 1) {  // 1 degree tolerance for more precision
-        turnLeft();  // Turn left (counterclockwise)
-        delay(50);  // Small delay to give time for the rudder to adjust
-    }
-    
-    stopMotor();  // Stop motor once turn is complete
-    Serial.println("Turn complete!");
-}
-
-// Read gyro angle
-float getGyroAngle() {
-    int16_t ax, ay, az, gx, gy, gz;
-    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-    float angle = (gx / 131.0) * 0.01; // Convert gyro reading to degrees
-    currentAngle += angle;
-    return currentAngle;
-}
-
-// Motor control functions
-void driveForward() {
-    esc.writeMicroseconds(1500); // Adjust throttle for forward motion
-}
-
-void turnLeft() {
-    rudder.write(90 - 45); // Adjust rudder for left turn (counterclockwise)
-    delay(1000); // Allow time for turn
-    rudder.write(90); // Reset rudder to neutral position
-}
-
-void stopMotor() {
-    esc.writeMicroseconds(1000); // Stop motor
+  // Calculate the yaw difference (desired heading vs. current yaw)
+  float yaw_difference = angle_deg - current_yaw;
+  
+  // Normalize the yaw difference to within -180 to 180 degrees
+  if (yaw_difference > 180) yaw_difference -= 360;
+  if (yaw_difference < -180) yaw_difference += 360;
+  
+  // Map the yaw difference to the servo angle for rudder control
+  int rudderAngle = map(yaw_difference, -180, 180, RUDDER_MIN, RUDDER_MAX);
+  rudderAngle = constrain(rudderAngle, RUDDER_MIN, RUDDER_MAX); // Keep it within bounds
+  
+  // Control the rudder to steer the boat in the correct direction
+  rudderServo.write(rudderAngle);
+  
+  // Print out the position and rudder angle for debugging
+  Serial.print("Elapsed Time (tau): ");
+  Serial.print(tau);
+  Serial.print(", t: ");
+  Serial.print(t);
+  Serial.print(", Angle: ");
+  Serial.print(angle_deg);
+  Serial.print(", Yaw: ");
+  Serial.print(current_yaw);
+  Serial.print(", Rudder: ");
+  Serial.println(rudderAngle);
+  
+  delay(TIME_STEP); // Wait for the next time step
 }
 
