@@ -1,118 +1,114 @@
 #include <Wire.h>
-#include <MPU6050.h>
 #include <Servo.h>
+#include <MPU6050.h>
 
-// Define motor and servo pins
-#define MOTOR_PIN 9      // Motor speed control pin (PWM)
-#define SERVO_PIN 10     // Servo control pin
+// Pin definitions
+const int escPin = 9;          // ESC control pin
+const int rudderPin = 10;      // Rudder servo control pin
 
-// Set constant velocity (speed). Adjust based on the motor specifications.
-#define VELOCITY 255     // Max speed for motor (use a value between 0 and 255)
+// Constants for the boat's path (semi-circle)
+const float R_X = 60.0;   // Semi-circle radius for x(t)
+const float R_Y = 80.0;   // Semi-circle radius for y(t)
 
-// Define servo angle limits for rudder (degrees)
-#define RUDDER_MIN -40   // Minimum rudder angle (left)
-#define RUDDER_MAX 40    // Maximum rudder angle (right)
+float tau = 0; // Time elapsed (you will increment this in your loop)
+float T = 10;  // Desired travel time (in seconds for the boat to travel from (60,0) to (-60,0))
+float t = 0;   // Parametric variable (time in radians)
 
-// Define total desired travel time in seconds
-#define T_FINAL 10       // Desired time to complete the path (in seconds)
-
-// Define simulation time step for t (in terms of milliseconds)
-#define TIME_STEP 100    // Simulation step in milliseconds (to update every 100ms)
-
-// Create servo object for the rudder
-Servo rudderServo;
-
-// Create MPU6050 object
+// MPU6050 gyroscope object
 MPU6050 mpu;
 
-// Gyroscope offset for yaw (initial calibration needed)
-float gyro_offset = 0;
+// Servo for the motor and rudder
+Servo esc;
+Servo rudderServo;
+
+// Gyroscope variables
+float yaw = 0;    // Boat's current heading (yaw angle)
+
+// PID control variables for heading correction
+float Kp = 1.0;  // Proportional gain for heading correction
+float Ki = 0.0;  // Integral gain for heading correction (optional)
+float Kd = 0.5;  // Derivative gain for heading correction (optional)
+
+float previousError = 0;
+float integral = 0;
+float headingError = 0;
+float headingCorrection = 0;
 
 void setup() {
-  // Initialize motor and servo
-  pinMode(MOTOR_PIN, OUTPUT);
-  rudderServo.attach(SERVO_PIN);
-  
-  // Start motor at constant velocity
-  analogWrite(MOTOR_PIN, VELOCITY);
-  
-  // Set initial servo position (center)
-  rudderServo.write(0); // 0 degrees initially
-  
-  // Initialize Serial communication
+  // Start Serial for debugging
   Serial.begin(9600);
-  
-  // Initialize the MPU6050 sensor
+
+  // Initialize ESC and rudder servo
+  esc.attach(escPin);
+  rudderServo.attach(rudderPin);
+
+  // Initialize MPU6050 (Gyroscope and Accelerometer)
   Wire.begin();
   mpu.initialize();
-  
-  // Calibrate the gyro (optional, for improved accuracy)
-  gyro_offset = mpu.getRotationZ();  // Get initial gyro offset for yaw
+  if (!mpu.testConnection()) {
+    Serial.println("MPU6050 connection failed");
+    while (1);
+  }
+
+  // Start with motor at low speed
+  esc.writeMicroseconds(1000); // Minimum motor speed
+  rudderServo.write(90);       // Neutral rudder position
 }
 
 void loop() {
-  // Calculate elapsed time in seconds
-  static unsigned long startTime = millis(); // Record the start time
-  unsigned long elapsedTime = millis() - startTime; // Elapsed time in milliseconds
-  float tau = elapsedTime / 1000.0; // Convert milliseconds to seconds
-  
-  if (tau >= T_FINAL) {
-    // Stop the boat after reaching the final time (semi-circle end)
-    analogWrite(MOTOR_PIN, 0);  // Stop the motor
-    return;
-  }
-  
-  // Calculate t based on the time scaling formula
-  float t = (tau / T_FINAL) * PI;  // t goes from 0 to PI over the travel time
-  
-  // Compute the direction vector components based on the new parametric equations
-  float dx_dt = -60 * sin(t);  // Derivative of x(t) = 60 * cos(t)
-  float dy_dt = 80 * cos(t);   // Derivative of y(t) = 80 * sin(t)
-  
-  // Normalize the direction vector to get the unit vector
-  float magnitude = sqrt(dx_dt * dx_dt + dy_dt * dy_dt);
-  float unit_dx = dx_dt / magnitude;
-  float unit_dy = dy_dt / magnitude;
-  
-  // Calculate the desired angle for the boat's heading (angle from positive X-axis)
-  float angle = atan2(unit_dy, unit_dx);  // atan2 returns angle in radians
-  
-  // Convert radians to degrees for servo control
-  float angle_deg = angle * (180.0 / PI);
-  
-  // Read the current yaw from the gyroscope
-  int16_t gx, gy, gz;
-  mpu.getRotation(&gx, &gy, &gz);  // Get gyro values (rotation around each axis)
-  
-  // Adjust yaw based on gyro data (rotate the yaw using Z-axis data)
-  float current_yaw = gyro_offset + (gz / 131.0);  // Convert to degrees (assuming 131 is the scale factor)
+  // Update time-based parametric variable t
+  t = (tau / T) * PI; // Calculate the current t based on time elapsed
 
-  // Calculate the yaw difference (desired heading vs. current yaw)
-  float yaw_difference = angle_deg - current_yaw;
+  // Get velocity components (dx/dt, dy/dt) for the path
+  float dx_dt = -R_X * sin(t);  // dx/dt = derivative of x(t)
+  float dy_dt = R_Y * cos(t);   // dy/dt = derivative of y(t)
+
+  // Calculate the magnitude of the velocity vector
+  float velocity_magnitude = sqrt(dx_dt * dx_dt + dy_dt * dy_dt);
+
+  // Map the velocity magnitude to the ESC motor speed
+  int motorSpeed = map(velocity_magnitude * 1000, 0, 1000, 1000, 2000);
+
+  // Calculate the desired heading angle (direction of the velocity vector)
+  float angle = atan2(dy_dt, dx_dt);  // Angle of the velocity direction vector
+
+  // Get the boat's current yaw from the MPU6050
+  yaw = getYaw();
+
+  // Correct the boat's heading with PID
+  float rudderAngle = calculateHeadingCorrection(angle);
+
+  // Set the motor speed and rudder position
+  esc.writeMicroseconds(motorSpeed);  // Control motor speed
+  rudderServo.write(rudderAngle);    // Control rudder
+
+  // Increment the time variable tau (simulate time elapsed)
+  tau += 0.1; // You can adjust this value to simulate different speeds or loop rates
   
-  // Normalize the yaw difference to within -180 to 180 degrees
-  if (yaw_difference > 180) yaw_difference -= 360;
-  if (yaw_difference < -180) yaw_difference += 360;
-  
-  // Map the yaw difference to the servo angle for rudder control
-  int rudderAngle = map(yaw_difference, -180, 180, RUDDER_MIN, RUDDER_MAX);
-  rudderAngle = constrain(rudderAngle, RUDDER_MIN, RUDDER_MAX); // Keep it within bounds
-  
-  // Control the rudder to steer the boat in the correct direction
-  rudderServo.write(rudderAngle);
-  
-  // Print out the position and rudder angle for debugging
-  Serial.print("Elapsed Time (tau): ");
-  Serial.print(tau);
-  Serial.print(", t: ");
-  Serial.print(t);
-  Serial.print(", Angle: ");
-  Serial.print(angle_deg);
-  Serial.print(", Yaw: ");
-  Serial.print(current_yaw);
-  Serial.print(", Rudder: ");
-  Serial.println(rudderAngle);
-  
-  delay(TIME_STEP); // Wait for the next time step
+  // Wait a short time before next iteration
+  delay(100);  // Delay in milliseconds (controls the frequency of updates)
 }
 
+float getYaw() {
+  mpu.getRotation(NULL, NULL, &yaw);  // Get yaw (z-axis rotation)
+  return yaw / 131.0;  // Convert raw gyro data to degrees (depends on your MPU6050 scale)
+}
+
+float calculateHeadingCorrection(float desiredAngle) {
+  // Calculate heading error (difference between desired and current yaw)
+  headingError = desiredAngle - yaw;
+  if (headingError > 180) headingError -= 360; // Normalize error to range [-180, 180]
+  if (headingError < -180) headingError += 360;
+
+  // Apply PID control to the heading error
+  integral += headingError;
+  float derivative = headingError - previousError;
+  headingCorrection = Kp * headingError + Ki * integral + Kd * derivative;
+  previousError = headingError;
+
+  // Map the heading correction to the rudder angle range (0 to 180 degrees)
+  int rudderAngle = 90 + headingCorrection; // 90 is neutral position
+  rudderAngle = constrain(rudderAngle, 0, 180);  // Ensure rudder angle is within valid range
+
+  return rudderAngle;
+}
