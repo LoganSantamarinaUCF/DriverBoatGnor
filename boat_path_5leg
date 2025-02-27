@@ -11,14 +11,20 @@ Servo rudder;
 const int escPin = 9;
 const int rudderPin = 10;
 
-// Define waypoints
-float waypoints[6][2] = {
-    {60, 0}, {60, 40}, {20, 80}, {-20, 80}, {-60, 40}, {-60, 0}
+// State machine states
+enum State {
+    LEG1,
+    LEG2,
+    LEG3,
+    LEG4,
+    LEG5
 };
 
-// Boat position tracking
-float posX = 60, posY = 0;
-int waypointIndex = 1; // Start at second waypoint
+State currentState = LEG1;
+
+// Define the distance for each leg
+float legDistances[5] = {40, 40 * sqrt(2), 40, 40 * sqrt(2), 40};
+float speed = 1.0; // Speed in feet per second (adjust based on motor speed)
 
 void setup() {
     Serial.begin(115200);
@@ -41,41 +47,73 @@ void setup() {
 }
 
 void loop() {
-    if (waypointIndex < 6) {
-        float targetX = waypoints[waypointIndex][0];
-        float targetY = waypoints[waypointIndex][1];
-
-        moveToWaypoint(targetX, targetY);
-        
-        if (waypointIndex < 5) {
-            turn45Degrees();
-        }
-
-        waypointIndex++;
-    } else {
-        stopMotor(); // Stop at final waypoint
+    switch (currentState) {
+        case LEG1:
+            travelLeg(40);  // Travel 40 feet for LEG1
+            break;
+        case LEG2:
+            travelLeg(40 * sqrt(2));  // Travel sqrt(2) * 40 feet for LEG2
+            break;
+        case LEG3:
+            travelLeg(40);  // Travel 40 feet for LEG3
+            break;
+        case LEG4:
+            travelLeg(40 * sqrt(2));  // Travel sqrt(2) * 40 feet for LEG4
+            break;
+        case LEG5:
+            travelLeg(40);  // Travel 40 feet for LEG5
+            break;
     }
 }
 
-// Move boat forward to target waypoint
-void moveToWaypoint(float targetX, float targetY) {
-    Serial.print("Moving to: "); Serial.print(targetX); Serial.print(", "); Serial.println(targetY);
+// Travel a specific leg distance and then turn 45 degrees
+void travelLeg(float legDistance) {
+    // Calculate time required to travel the leg distance (time = distance / speed)
+    unsigned long travelTime = legDistance / speed * 1000;  // Convert to milliseconds
+    
+    // Move forward at the set speed for the leg
     driveForward();
-    delay(3000); // Adjust for actual distance/time
-    stopMotor();
+    delay(travelTime);  // Move forward for the calculated time
+    
+    stopMotor();  // Stop the motor once the leg distance is traveled
+    
+    // Turn 45 degrees left
+    turn45Degrees();
+    
+    // Move to the next state
+    switch (currentState) {
+        case LEG1:
+            currentState = LEG2;
+            break;
+        case LEG2:
+            currentState = LEG3;
+            break;
+        case LEG3:
+            currentState = LEG4;
+            break;
+        case LEG4:
+            currentState = LEG5;
+            break;
+        case LEG5:
+            stopMotor(); // Final destination reached, stop the motor
+            break;
+    }
 }
 
-// Turn boat 45 degrees using MPU6050
+// Turn boat 45 degrees using MPU6050 and verify turn with gyro (LEFT TURN)
 void turn45Degrees() {
-    Serial.println("Turning 45 degrees...");
-    float initialAngle = getGyroAngle();
-    float targetAngle = initialAngle + 45;
+    Serial.println("Turning 45 degrees left...");
+    float initialAngle = getGyroAngle();  // Read the initial angle
+    float targetAngle = initialAngle - 45;  // Set target angle (45 degrees left from current position)
 
-    while (getGyroAngle() < targetAngle) {
-        turnRight();
-        delay(50);
+    // Turn until the current angle reaches the target angle
+    while (abs(getGyroAngle() - targetAngle) > 1) {  // 1 degree tolerance for more precision
+        turnLeft();  // Turn left (counterclockwise)
+        delay(50);  // Small delay to give time for the rudder to adjust
     }
-    stopMotor();
+    
+    stopMotor();  // Stop motor once turn is complete
+    Serial.println("Turn complete!");
 }
 
 // Read gyro angle
@@ -92,12 +130,17 @@ void driveForward() {
     esc.writeMicroseconds(1500); // Adjust throttle for forward motion
 }
 
-void turnRight() {
-    rudder.write(90 + 45); // Adjust rudder for right turn
+void turnLeft() {
+    rudder.write(90 - 45); // Adjust rudder for left turn (counterclockwise)
     delay(1000); // Allow time for turn
-    rudder.write(90); // Reset rudder
+    rudder.write(90); // Reset rudder to neutral position
 }
 
 void stopMotor() {
     esc.writeMicroseconds(1000); // Stop motor
 }
+
+void turn45Degrees() {
+    Serial.println("Turning 45 degrees...");
+    float initialAngle = getGyroAngle();  // Read the initial angle
+    float targetAngle = initialAngle + 45;  // Set target angle (45 degrees from curre
