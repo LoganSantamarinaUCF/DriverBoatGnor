@@ -1,0 +1,85 @@
+#include <Servo.h>
+
+// Define motor and servo pins
+#define MOTOR_PIN 9      // Motor speed control pin (PWM)
+#define SERVO_PIN 10     // Servo control pin
+
+// Set constant velocity (speed). Adjust based on the motor specifications.
+#define VELOCITY 255     // Max speed for motor (use a value between 0 and 255)
+
+// Define servo angle limits for rudder (degrees)
+#define RUDDER_MIN -40   // Minimum rudder angle (left)
+#define RUDDER_MAX 40    // Maximum rudder angle (right)
+
+// Define total desired travel time in seconds
+#define T_FINAL 10       // Desired time to complete the path (in seconds)
+
+// Define simulation time step for t (in terms of milliseconds)
+#define TIME_STEP 100    // Simulation step in milliseconds (to update every 100ms)
+
+// Create a servo object
+Servo rudderServo;
+
+void setup() {
+  // Initialize motor and servo
+  pinMode(MOTOR_PIN, OUTPUT);
+  rudderServo.attach(SERVO_PIN);
+  
+  // Start motor at constant velocity
+  analogWrite(MOTOR_PIN, VELOCITY);
+  
+  // Set initial servo position (center)
+  rudderServo.write(0); // 0 degrees initially
+  
+  Serial.begin(9600);
+}
+
+void loop() {
+  // Calculate elapsed time in seconds
+  static unsigned long startTime = millis(); // Record the start time
+  unsigned long elapsedTime = millis() - startTime; // Elapsed time in milliseconds
+  float tau = elapsedTime / 1000.0; // Convert milliseconds to seconds
+  
+  if (tau >= T_FINAL) {
+    // Stop the boat after reaching the final time (semi-circle end)
+    analogWrite(MOTOR_PIN, 0);  // Stop the motor
+    return;
+  }
+  
+  // Calculate t based on the time scaling formula
+  float t = (tau / T_FINAL) * PI;  // t goes from 0 to PI over the travel time
+  
+  // Compute the direction vector components based on t
+  float dx_dt = -80 * sin(t);
+  float dy_dt = 100 * cos(t);
+  
+  // Normalize the direction vector to get the unit vector
+  float magnitude = sqrt(dx_dt * dx_dt + dy_dt * dy_dt);
+  float unit_dx = dx_dt / magnitude;
+  float unit_dy = dy_dt / magnitude;
+  
+  // Calculate the desired angle for the boat's heading (angle from positive X-axis)
+  float angle = atan2(unit_dy, unit_dx);  // atan2 returns angle in radians
+  
+  // Convert radians to degrees for servo control
+  float angle_deg = angle * (180.0 / PI);
+  
+  // Map the angle to the rudder servo range (-40 to 40 degrees)
+  int rudderAngle = map(angle_deg, -180, 180, RUDDER_MIN, RUDDER_MAX);
+  rudderAngle = constrain(rudderAngle, RUDDER_MIN, RUDDER_MAX); // Keep it within bounds
+  
+  // Control the rudder to steer the boat in the correct direction
+  rudderServo.write(rudderAngle);
+  
+  // Print out the position and rudder angle for debugging
+  Serial.print("Elapsed Time (tau): ");
+  Serial.print(tau);
+  Serial.print(", t: ");
+  Serial.print(t);
+  Serial.print(", Angle: ");
+  Serial.print(angle_deg);
+  Serial.print(", Rudder: ");
+  Serial.println(rudderAngle);
+  
+  delay(TIME_STEP); // Wait for the next time step
+}
