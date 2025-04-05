@@ -13,7 +13,7 @@ const int escPin = 9;
 const int rudderPin = 10;
 
 // Button Pin (connected to pin 7)
-const int buttonPin = 7; 
+const int buttonPin = 7;
 bool buttonPressed = false;
 unsigned long buttonPressTime = 0;
 const unsigned long delayTime = 5000; // 5-second delay
@@ -102,14 +102,43 @@ void driveForward() {
     esc.writeMicroseconds(1500); // Adjust throttle for forward motion
 }
 
+void driveForwardSlow() {
+    esc.writeMicroseconds(1200); // Adjust throttle for turning motion
+}
+
 void stopMotor() {
     esc.writeMicroseconds(1000); // Stop motor
 }
 
 void turnLeft() {
-    rudder.write(90 - 45); // Adjust rudder for left turn (turning left)
-    delay(1000); // Allow time for the boat to turn
+    // Get the initial angle from the gyro
+    float initialAngle = getGyroAngle();
+    float targetAngle = initialAngle + 45; // Target 45 degrees turn
+    
+    // Turn rudder left to start turning
+    rudder.write(90 - 45); // Adjust rudder for left turn
+    delay(100); // Small delay to ensure rudder starts moving
+
+    // Keep motor running while turning
+    driveForwardSlow();
+
+    // Now wait until the boat has turned 45 degrees using the gyroscope
+    while (getGyroAngle() < targetAngle) {
+        delay(50); // Small delay for stability
+    }
+
+    stopMotor(); // Stop motor after the turn is completed
     rudder.write(90); // Reset rudder to neutral position
+    Serial.println("Turn completed.");
+}
+
+// Read gyro angle to track boat's heading
+float getGyroAngle() {
+    int16_t ax, ay, az, gx, gy, gz;
+    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    float angle = (gx / 131.0) * 0.01; // Convert gyro reading to degrees
+    currentAngle += angle;
+    return currentAngle;
 }
 
 // Move boat for a specified distance (in feet)
@@ -124,7 +153,7 @@ void moveLeg(float distance) {
     delay(timeToMove * 1000); // Convert time to milliseconds for delay
     stopMotor();
 
-    // Turn left 45 degrees
+    // Turn left 45 degrees using the gyroscope
     turnLeft();
 
     // Update state to the next leg
