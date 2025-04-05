@@ -2,6 +2,7 @@
 #include <MPU6050.h>
 #include <Servo.h>
 
+// MPU6050 setup
 MPU6050 mpu;
 float currentAngle = 0; // Track heading
 
@@ -11,29 +12,37 @@ Servo rudder;
 const int escPin = 9;
 const int rudderPin = 10;
 
-// State machine states
-enum State {
-    LEG1,
-    LEG2,
-    LEG3,
-    LEG4,
-    LEG5
-};
+// Button Pin (connected to pin 7)
+const int buttonPin = 7; 
+bool buttonPressed = false;
+unsigned long buttonPressTime = 0;
+const unsigned long delayTime = 5000; // 5-second delay
 
-State currentState = LEG1;
+// Boat State
+enum BoatState {IDLE, MOVING};
+BoatState currentState = IDLE;
 
-// Define the distance for each leg
-float legDistances[5] = {40, 40 * sqrt(2), 40, 40 * sqrt(2), 40};
-float speed = 1.0; // Speed in feet per second (adjust based on motor speed)
+// Boat movement states
+enum MovementState {LEG1, LEG2, LEG3, LEG4, LEG5};
+MovementState movementState = LEG1;
 
+// Boat kinematic values
+const float speed = 1.0; // Speed in feet per second (adjustable as you measure)
+const float leg1Distance = 40.0; // Distance for leg1 in feet
+const float leg2Distance = 40.0 * sqrt(2); // Distance for leg2 (diagonal)
+const float leg3Distance = 40.0;
+const float leg4Distance = 40.0 * sqrt(2); // Distance for leg4 (diagonal)
+const float leg5Distance = 40.0;
+
+// Setup function
 void setup() {
     Serial.begin(115200);
     Wire.begin();
     mpu.initialize();
-    
+
     esc.attach(escPin);
     rudder.attach(rudderPin);
-    
+
     // Initialize ESC (Assumes 1000-2000us PWM range)
     esc.writeMicroseconds(1000); // Stop motor
     delay(2000); // Allow ESC to initialize
@@ -44,85 +53,48 @@ void setup() {
         while (1);
     }
     Serial.println("MPU6050 connected.");
+
+    // Initialize the button pin
+    pinMode(buttonPin, INPUT_PULLUP); // Use internal pull-up resistor
 }
 
 void loop() {
-    switch (currentState) {
-        case LEG1:
-            travelLeg(40);  // Travel 40 feet for LEG1
-            break;
-        case LEG2:
-            travelLeg(40 * sqrt(2));  // Travel sqrt(2) * 40 feet for LEG2
-            break;
-        case LEG3:
-            travelLeg(40);  // Travel 40 feet for LEG3
-            break;
-        case LEG4:
-            travelLeg(40 * sqrt(2));  // Travel sqrt(2) * 40 feet for LEG4
-            break;
-        case LEG5:
-            travelLeg(40);  // Travel 40 feet for LEG5
-            break;
+    // Check button state (button pressed when LOW)
+    if (digitalRead(buttonPin) == LOW && !buttonPressed) {
+        // Button pressed, record the press time
+        buttonPressed = true;
+        buttonPressTime = millis();
+        Serial.println("Button pressed, starting 5 second delay...");
     }
-}
 
-// Travel a specific leg distance and then turn 45 degrees
-void travelLeg(float legDistance) {
-    // Calculate time required to travel the leg distance (time = distance / speed)
-    unsigned long travelTime = legDistance / speed * 1000;  // Convert to milliseconds
-    
-    // Move forward at the set speed for the leg
-    driveForward();
-    delay(travelTime);  // Move forward for the calculated time
-    
-    stopMotor();  // Stop the motor once the leg distance is traveled
-    
-    // Turn 45 degrees left
-    turn45Degrees();
-    
-    // Move to the next state
-    switch (currentState) {
-        case LEG1:
-            currentState = LEG2;
-            break;
-        case LEG2:
-            currentState = LEG3;
-            break;
-        case LEG3:
-            currentState = LEG4;
-            break;
-        case LEG4:
-            currentState = LEG5;
-            break;
-        case LEG5:
-            stopMotor(); // Final destination reached, stop the motor
-            break;
+    // Wait for 5 seconds after button press
+    if (buttonPressed && (millis() - buttonPressTime >= delayTime)) {
+        // 5 seconds have passed, start moving
+        currentState = MOVING;
+        buttonPressed = false; // Reset the button press state
+        Serial.println("5 seconds passed, starting the boat...");
     }
-}
 
-// Turn boat 45 degrees using MPU6050 and verify turn with gyro (LEFT TURN)
-void turn45Degrees() {
-    Serial.println("Turning 45 degrees left...");
-    float initialAngle = getGyroAngle();  // Read the initial angle
-    float targetAngle = initialAngle - 45;  // Set target angle (45 degrees left from current position)
-
-    // Turn until the current angle reaches the target angle
-    while (abs(getGyroAngle() - targetAngle) > 1) {  // 1 degree tolerance for more precision
-        turnLeft();  // Turn left (counterclockwise)
-        delay(50);  // Small delay to give time for the rudder to adjust
+    // Act based on the boat's current state
+    if (currentState == MOVING) {
+        switch (movementState) {
+            case LEG1:
+                moveLeg(leg1Distance);
+                break;
+            case LEG2:
+                moveLeg(leg2Distance);
+                break;
+            case LEG3:
+                moveLeg(leg3Distance);
+                break;
+            case LEG4:
+                moveLeg(leg4Distance);
+                break;
+            case LEG5:
+                moveLeg(leg5Distance);
+                break;
+        }
     }
-    
-    stopMotor();  // Stop motor once turn is complete
-    Serial.println("Turn complete!");
-}
-
-// Read gyro angle
-float getGyroAngle() {
-    int16_t ax, ay, az, gx, gy, gz;
-    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-    float angle = (gx / 131.0) * 0.01; // Convert gyro reading to degrees
-    currentAngle += angle;
-    return currentAngle;
 }
 
 // Motor control functions
@@ -130,17 +102,43 @@ void driveForward() {
     esc.writeMicroseconds(1500); // Adjust throttle for forward motion
 }
 
-void turnLeft() {
-    rudder.write(90 - 45); // Adjust rudder for left turn (counterclockwise)
-    delay(1000); // Allow time for turn
-    rudder.write(90); // Reset rudder to neutral position
-}
-
 void stopMotor() {
     esc.writeMicroseconds(1000); // Stop motor
 }
 
-void turn45Degrees() {
-    Serial.println("Turning 45 degrees...");
-    float initialAngle = getGyroAngle();  // Read the initial angle
-    float targetAngle = initialAngle + 45;  // Set target angle (45 degrees from curre
+void turnLeft() {
+    rudder.write(90 - 45); // Adjust rudder for left turn (turning left)
+    delay(1000); // Allow time for the boat to turn
+    rudder.write(90); // Reset rudder to neutral position
+}
+
+// Move boat for a specified distance (in feet)
+void moveLeg(float distance) {
+    float timeToMove = distance / speed; // Calculate the time required to move the given distance (time = distance / speed)
+    Serial.print("Moving for "); 
+    Serial.print(timeToMove); 
+    Serial.println(" seconds.");
+
+    // Move forward for the required time
+    driveForward();
+    delay(timeToMove * 1000); // Convert time to milliseconds for delay
+    stopMotor();
+
+    // Turn left 45 degrees
+    turnLeft();
+
+    // Update state to the next leg
+    if (movementState == LEG1) {
+        movementState = LEG2;
+    } else if (movementState == LEG2) {
+        movementState = LEG3;
+    } else if (movementState == LEG3) {
+        movementState = LEG4;
+    } else if (movementState == LEG4) {
+        movementState = LEG5;
+    } else {
+        movementState = LEG1; // Reset to first leg if needed
+        currentState = IDLE;  // Optionally, reset to IDLE after completing all legs
+        Serial.println("Boat has completed the path!");
+    }
+}
