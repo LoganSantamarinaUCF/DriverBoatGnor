@@ -12,19 +12,9 @@ Servo rudder;
 const int escPin = 9;
 const int rudderPin = 10;
 
-// Button Pin (connected to pin 7)
-const int buttonPin = 7;
-bool buttonPressed = false;
-unsigned long buttonPressTime = 0;
-const unsigned long delayTime = 5000; // 5-second delay
-
-// Boat State
-enum BoatState {IDLE, MOVING};
-BoatState currentState = IDLE;
-
 // Boat movement states
-enum MovementState {LEG1, LEG2, LEG3, LEG4, LEG5};
-MovementState movementState = LEG1;
+enum State {LEG1, LEG2, LEG3, LEG4, LEG5};
+State legState = LEG1;
 
 // Boat kinematic values
 const float speed = 1.0; // Speed in feet per second (adjustable as you measure)
@@ -54,46 +44,25 @@ void setup() {
     }
     Serial.println("MPU6050 connected.");
 
-    // Initialize the button pin
-    pinMode(buttonPin, INPUT_PULLUP); // Use internal pull-up resistor
 }
 
 void loop() {
-    // Check button state (button pressed when LOW)
-    if (digitalRead(buttonPin) == LOW && !buttonPressed) {
-        // Button pressed, record the press time
-        buttonPressed = true;
-        buttonPressTime = millis();
-        Serial.println("Button pressed, starting 5 second delay...");
-    }
-
-    // Wait for 5 seconds after button press
-    if (buttonPressed && (millis() - buttonPressTime >= delayTime)) {
-        // 5 seconds have passed, start moving
-        currentState = MOVING;
-        buttonPressed = false; // Reset the button press state
-        Serial.println("5 seconds passed, starting the boat...");
-    }
-
-    // Act based on the boat's current state
-    if (currentState == MOVING) {
-        switch (movementState) {
-            case LEG1:
-                moveLeg(leg1Distance);
-                break;
-            case LEG2:
-                moveLeg(leg2Distance);
-                break;
-            case LEG3:
-                moveLeg(leg3Distance);
-                break;
-            case LEG4:
-                moveLeg(leg4Distance);
-                break;
-            case LEG5:
-                moveLeg(leg5Distance);
-                break;
-        }
+    switch (legState) {
+        case LEG1:
+            moveLeg(leg1Distance);
+            break;
+        case LEG2:
+            moveLeg(leg2Distance);
+            break;
+        case LEG3:
+            moveLeg(leg3Distance);
+            break;
+        case LEG4:
+            moveLeg(leg4Distance);
+            break;
+        case LEG5:
+            moveLeg(leg5Distance);
+            break;
     }
 }
 
@@ -157,17 +126,17 @@ void moveLeg(float distance) {
     turnLeft();
 
     // Update state to the next leg
-    if (movementState == LEG1) {
-        movementState = LEG2;
-    } else if (movementState == LEG2) {
-        movementState = LEG3;
-    } else if (movementState == LEG3) {
-        movementState = LEG4;
-    } else if (movementState == LEG4) {
-        movementState = LEG5;
+    if (legState == LEG1) {
+        legState = LEG2;
+    } else if (legState == LEG2) {
+        legState = LEG3;
+    } else if (legState == LEG3) {
+        legState = LEG4;
+    } else if (legState == LEG4) {
+        legState = LEG5;
     } else {
-        movementState = LEG1; // Reset to first leg if needed
-        currentState = IDLE;  // Optionally, reset to IDLE after completing all legs
+        legState = LEG1; // Reset to first leg if needed
+        esc.writeMicroseconds(1000);
         Serial.println("Boat has completed the path!");
     }
 }
